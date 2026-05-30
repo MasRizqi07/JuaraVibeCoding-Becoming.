@@ -1,0 +1,127 @@
+@import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400&family=DM+Sans:opsz,wght@9..40,300;9..40,400;9..40,500&family=DM+Mono:wght@400&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-serif: "Cormorant Garamond", Georgia, serif;
+  --font-sans: "DM Sans", system-ui, sans-serif;
+  --font-mono: "DM Mono", monospace;
+
+  --color-bg: var(--bg);
+  --color-bg2: var(--bg2);
+  --color-bg3: var(--bg3);
+  --color-text: var(--text);
+  --color-muted: var(--muted);
+  --color-faint: var(--faint);
+  --color-gold: var(--gold);
+  --color-gold-a: var(--gold-a);
+  --color-gold-b: var(--gold-b);
+  --color-purple: var(--purple);
+  --color-purple-a: var(--purple-a);
+  --color-border: var(--border);
+  --color-border-gold: var(--border-gold);
+  
+  --radius-lg: 10px;
+  --radius-md: 6px;
+}
+
+@layer base {
+  :root {
+    --bg: #080808;
+    --bg2: #0E0E0E;
+    --bg3: #161616;
+    --text: #F0EDE6;
+    --muted: #888888;
+    --faint: #3A3A3A;
+    --gold: #C9A844;
+    --gold-a: rgba(201,168,68,0.12);
+    --gold-b: rgba(201,168,68,0.25);
+    --purple: #8B6CF7;
+    --purple-a: rgba(139,108,247,0.12);
+    --border: rgba(255,255,255,0.06);
+    --border-gold: rgba(201,168,68,0.18);
+    --bg-alpha: rgba(8,8,8,0.88);
+    --r: 10px;
+    --rs: 6px;
+  }
+
+  :root[data-theme="light"] {
+    --bg: #F2EFE9;
+    --bg2: #EAE6DF;
+    --bg3: #DEDAD1;
+    --text: #111111;
+    --muted: #555555;
+    --faint: #A0A0A0;
+    --gold: #8C6A1A; /* Darkened from A88624 for >4.5 contrast */
+    --gold-a: rgba(140,106,26,0.12);
+    --gold-b: rgba(140,106,26,0.25);
+    --purple: #6A4CD7;
+    --purple-a: rgba(106,76,215,0.12);
+    --border: rgba(0,0,0,0.1);
+    --border-gold: rgba(140,106,26,0.2);
+    --bg-alpha: rgba(242,239,233,0.88);
+  }
+
+  html, body {
+    width: 100%;
+    min-height: 100vh;
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    overflow-x: hidden;
+  }
+}
+
+/* Animations that are unique and hard to write purely with utility classes */
+@keyframes lineFlow {
+  0%, 100% { opacity: 0.25; transform: scaleY(0.9); }
+  50% { opacity: 1; transform: scaleY(1.1); }
+}
+
+@keyframes aiPulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes pulse-ring {
+  0%, 100% { opacity: 0.3; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1.06); }
+}
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%) skewX(-12deg); }
+  100% { transform: translateX(200%) skewX(-12deg); }
+}
+
+.btn-shimmer {
+  position: relative;
+}
+
+.btn-shimmer::after {
+  content: '';
+  position: absolute;
+  top: 0; left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.25), transparent);
+  animation: shimmer 3.5s infinite 2s;
+}
+
+@keyframes caretBlink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .btn-shimmer::after {
+    display: none !important;
+  }
+}

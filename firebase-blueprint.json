@@ -1,0 +1,64 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "displayName": { "type": "string" },
+        "email": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "displayName", "email", "createdAt"]
+    },
+    "ReflectionSession": {
+       "title": "ReflectionSession",
+       "description": "Session data",
+       "type": "object",
+       "properties": {
+         "id": { "type": "string" },
+         "userId": { "type": "string" },
+         "answers": { "type": "array" },
+         "status": { "type": "string" },
+         "createdAt": { "type": "number" },
+         "completedAt": { "type": "number" }
+       },
+       "required": ["id", "userId", "answers", "status", "createdAt"]
+    },
+    "BecomingResult": {
+      "title": "BecomingResult",
+      "description": "Result",
+      "type": "object",
+      "properties": {
+        "sessionId": { "type": "string" },
+        "userId": { "type": "string" },
+        "identityAnalysis": { "type": "object" },
+        "potentialRadar": { "type": "object" },
+        "futureA": { "type": "object" },
+        "futureB": { "type": "object" },
+        "regretPrediction": { "type": "object" },
+        "futureLetter": { "type": "object" },
+        "transformationPlan": { "type": "object" },
+        "shareCard": { "type": "object" },
+        "generatedAt": { "type": "number" }
+      },
+      "required": ["sessionId", "userId", "generatedAt"]
+    }
+  },
+  "firestore": {
+    "/users/{uid}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "User profile"
+    },
+    "/sessions/{sessionId}": {
+      "schema": { "$ref": "#/entities/ReflectionSession" },
+      "description": "Session"
+    },
+    "/results/{sessionId}": {
+      "schema": { "$ref": "#/entities/BecomingResult" },
+      "description": "Result"
+    }
+  }
+}

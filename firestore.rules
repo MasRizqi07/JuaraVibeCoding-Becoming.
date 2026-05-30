@@ -1,0 +1,45 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // User profiles
+    match /users/{userId} {
+      allow get, create, update: if request.auth != null
+        && request.auth.uid == userId;
+      allow delete: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    // Reflection sessions
+    match /sessions/{sessionId} {
+      allow get: if request.auth != null && (
+        resource == null || resource.data.userId == request.auth.uid
+      );
+      allow list: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+
+    // AI-synthesized results
+    match /results/{resultId} {
+      allow get: if request.auth != null && (
+        resource == null || resource.data.userId == request.auth.uid
+      );
+      allow list: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+      allow create: if request.auth != null
+        && request.resource.data.userId == request.auth.uid;
+      allow update: if request.auth != null
+        && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == request.auth.uid;
+      allow delete: if request.auth != null
+        && resource.data.userId == request.auth.uid;
+    }
+  }
+}
