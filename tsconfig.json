@@ -16,6 +16,9 @@
     "allowJs": true,
     "jsx": "react-jsx",
     "paths": {
+      "@becoming/types": [
+        "./packages/types/index.ts"
+      ],
       "@/*": [
         "./*"
       ]

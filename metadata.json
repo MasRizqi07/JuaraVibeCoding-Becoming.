@@ -2,5 +2,5 @@
   "name": "Becoming.",
   "description": "A deeply personal AI-powered self-reflection journey.",
   "requestFramePermissions": [],
-  "majorCapabilities": []
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

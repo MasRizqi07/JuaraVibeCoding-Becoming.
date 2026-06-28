@@ -70,6 +70,17 @@
     -webkit-font-smoothing: antialiased;
     overflow-x: hidden;
   }
+
+  /* Structural elements smooth cross-fade transition on theme changes, excluding custom pointer events */
+  html, body, 
+  nav, aside, main, header, footer, 
+  p, span, h1, h2, h3, h4, h5, h6, button, li, a, section,
+  div:not(.pointer-events-none) {
+    transition: background-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+                color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+                border-color 0.6s cubic-bezier(0.4, 0, 0.2, 1),
+                box-shadow 0.6s cubic-bezier(0.4, 0, 0.2, 1);
+  }
 }
 
 /* Animations that are unique and hard to write purely with utility classes */
@@ -124,4 +135,184 @@
   .btn-shimmer::after {
     display: none !important;
   }
+}
+
+/* Dedicated premium print-friendly CSS stylesheet for results paper copies */
+@media print {
+  /* Hide non-printable overlays, interactive buttons, custom canvases, navigations */
+  nav, 
+  aside, 
+  button, 
+  iframe, 
+  canvas,
+  svg:not(.printable-svg), 
+  [role="tablist"],
+  #feedback-btn, 
+  .no-print {
+    display: none !important;
+  }
+
+  /* Force ink-saving high-contrast light mode for physical printing */
+  :root, html, body {
+    background: #ffffff !important;
+    color: #000000 !important;
+    font-family: "Times New Roman", Georgia, serif !important;
+    overflow: visible !important;
+    position: static !important;
+    height: auto !important;
+    min-height: auto !important;
+    width: 100% !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+
+  /* Reset all fixed or absolute viewport layers to natural stream block layout */
+  .fixed, .absolute, .sticky {
+    position: relative !important;
+    inset: auto !important;
+    width: 100% !important;
+    height: auto !important;
+    overflow: visible !important;
+    background: none !important;
+    box-shadow: none !important;
+    border: none !important;
+    backdrop-filter: none !important;
+    opacity: 1 !important;
+  }
+
+  /* Content optimization and centering */
+  #results-content {
+    max-width: 100% !important;
+    width: 100% !important;
+    padding: 20px !important;
+    margin: 0 auto !important;
+    display: block !important;
+    float: none !important;
+  }
+
+  /* Typography formatting for clean pagination alignment */
+  h1, h2, h3, h4, h5, h6 {
+    color: #000000 !important;
+    font-family: "Times New Roman", Georgia, serif !important;
+    page-break-after: avoid;
+    break-after: avoid;
+    margin-top: 1.5rem !important;
+    margin-bottom: 0.8rem !important;
+  }
+
+  h1 {
+    font-size: 26pt !important;
+    border-bottom: 1px calc-size(solid, #000000) !important;
+    padding-bottom: 5px !important;
+  }
+
+  h2 {
+    font-size: 18pt !important;
+    border-bottom: 0.5px solid #666666 !important;
+    padding-bottom: 3px !important;
+  }
+
+  h3 {
+    font-size: 14pt !important;
+  }
+
+  p, li, span, tr, td {
+    color: #222222 !important;
+    font-size: 11pt !important;
+    line-height: 1.5 !important;
+  }
+
+  /* Smart sections break optimization */
+  .print-break-section {
+    page-break-before: always;
+    break-before: page;
+    padding-top: 2cm !important;
+  }
+
+  /* Cards contrast enhancement */
+  .bg-\[var\(--bg2\)\] {
+    background: #fafafa !important;
+    border: 1px solid #cccccc !important;
+    border-radius: 4px !important;
+    color: #000000 !important;
+    margin-bottom: 1.5rem !important;
+    padding: 1.5rem !important;
+  }
+
+  .border {
+    border-color: #bbbbbb !important;
+  }
+
+  /* Keep code blocks or monospaced metrics legible */
+  .font-mono {
+    font-family: Courier, monospace !important;
+    font-size: 9pt !important;
+    color: #444444 !important;
+  }
+
+  /* Precision layout for habit cards in physical prints */
+  .habit-card-print {
+    break-inside: avoid !important;
+    page-break-inside: avoid !important;
+    margin-bottom: 1.5rem !important;
+    display: block !important;
+    float: none !important;
+    width: 100% !important;
+    background: #fafafa !important;
+    border: 1px solid #cccccc !important;
+    padding: 1.25rem !important;
+  }
+
+  /* Custom header logo and confidential watermark for printed papers */
+  .results-shell {
+    position: relative !important;
+  }
+
+  .results-shell::before {
+    content: "BECOMING. ANALYTICAL PLATFORM DISCIPLIARY PROFILE" !important;
+    display: block !important;
+    text-align: center !important;
+    font-family: "Times New Roman", Georgia, serif !important;
+    font-size: 16pt !important;
+    font-weight: bold !important;
+    letter-spacing: 0.25em !important;
+    border-bottom: 2px solid #000000 !important;
+    padding-bottom: 10px !important;
+    margin-bottom: 35px !important;
+    color: #000000 !important;
+    text-transform: uppercase !important;
+  }
+
+  .results-shell::after {
+    content: "Becoming. Chrono-Habit trajectory projection summary  |  UNCLASSIFIED ARCHIVE" !important;
+    position: fixed !important;
+    bottom: 1.5cm !important;
+    left: 0 !important;
+    right: 0 !important;
+    text-align: center !important;
+    font-family: "Times New Roman", Georgia, serif !important;
+    font-size: 8pt !important;
+    color: #777777 !important;
+    letter-spacing: 0.12em !important;
+    border-top: 1px solid #bbbbbb !important;
+    padding-top: 8px !important;
+    pointer-events: none !important;
+  }
+}
+
+/* Download Report Button high-fidelity hover micro-animations */
+#btn-download-report {
+  transition: all 0.4s cubic-bezier(0.25, 1, 0.5, 1) !important;
+  transform-origin: center;
+  position: relative;
+}
+
+#btn-download-report:hover {
+  letter-spacing: 0.14em !important;
+  padding-left: 1.65rem !important;
+  padding-right: 1.65rem !important;
+  color: #FFF3C4 !important; /* Brighter gold shade */
+  border-color: #C9A844 !important;
+  box-shadow: 0 0 15px rgba(201, 168, 68, 0.2) !important;
+  transform: scale(1.02);
 }

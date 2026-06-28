@@ -14,11 +14,18 @@ interface BecomingStore {
   currentQuestionIndex: number;
   isSessionComplete: boolean;
 
-  analysisStep: 'idle' | 'scanning' | 'projecting' | 'generating' | 'complete';
+  analysisStep: 'idle' | 'scanning' | 'projecting' | 'generating' | 'retrying' | 'complete';
   analysisProgress: number; // 0-100
 
   result: BecomingResult | null;
   activeView: 'split' | 'future-a' | 'future-b' | 'letter' | 'plan' | 'share' | 'overview' | 'identity' | 'history';
+
+  // Rate Limiting and Q positioning/bundling states
+  isRateLimited: boolean;
+  retryAttempt: number;
+  retryDelaySec: number;
+  retryingMessage: string;
+  generatedQuestions: { question: string; category: string }[];
 
   setUser: (user: UserProfile | null) => void;
   setAuthLoading: (loading: boolean) => void;
@@ -28,6 +35,7 @@ interface BecomingStore {
   startSession: () => Promise<void>;
   loadUserState: () => Promise<void>;
   submitAnswer: (answer: string, question: string, category: string) => Promise<void>;
+  saveDraftAnswer: (draft: string) => Promise<void>;
   skipQuestion: (question: string, category: string) => Promise<void>;
   triggerAnalysis: () => Promise<void>;
   setActiveView: (view: 'split' | 'future-a' | 'future-b' | 'letter' | 'plan' | 'share' | 'overview' | 'identity' | 'history') => void;
@@ -35,6 +43,8 @@ interface BecomingStore {
   resetSession: () => void;
   setSession: (s: ReflectionSession) => void;
   setResult: (r: BecomingResult) => void;
+  setRateLimited: (isLimited: boolean) => void;
+  setGeneratedQuestions: (questions: { question: string; category: string }[]) => void;
 }
 
 export const useBecomingStore = create<BecomingStore>((set, get) => ({
@@ -51,10 +61,18 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
   result: null,
   activeView: 'overview',
 
+  isRateLimited: false,
+  retryAttempt: 0,
+  retryDelaySec: 0,
+  retryingMessage: '',
+  generatedQuestions: [],
+
   setUser: (user) => set({ user, isAuthLoading: false }),
   setAuthLoading: (loading) => set({ isAuthLoading: loading }),
   setSession: (s) => set({ currentSession: s, currentQuestionIndex: s.answers.length }),
   setResult: (r) => set({ result: r, analysisStep: 'complete' }),
+  setRateLimited: (isLimited) => set({ isRateLimited: isLimited }),
+  setGeneratedQuestions: (questions) => set({ generatedQuestions: questions }),
 
   signInWithGoogle: async () => {
     try {
@@ -77,7 +95,17 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
   
   signOut: async () => {
     await fbSignOut(auth);
-    set({ user: null, currentSession: null, result: null, currentQuestionIndex: 0 });
+    set({ 
+      user: null, 
+      currentSession: null, 
+      result: null, 
+      currentQuestionIndex: 0,
+      isRateLimited: false,
+      retryAttempt: 0,
+      retryDelaySec: 0,
+      retryingMessage: '',
+      generatedQuestions: []
+    });
   },
 
   startSession: async () => {
@@ -114,7 +142,7 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
     const { currentSession, currentQuestionIndex } = get();
     if (!currentSession) return;
     
-    const newSession = { ...currentSession };
+    const newSession: ReflectionSession = { ...currentSession };
     newSession.answers = [...newSession.answers, {
       questionId: String(currentQuestionIndex),
       question,
@@ -122,8 +150,17 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
       category,
       answeredAt: Date.now()
     }];
+    newSession.draftAnswer = ''; // Clear draft answer upon successful question commit
     await saveSession(newSession);
     set({ currentSession: newSession, currentQuestionIndex: currentQuestionIndex + 1 });
+  },
+
+  saveDraftAnswer: async (draft) => {
+    const { currentSession } = get();
+    if (!currentSession) return;
+    const updated: ReflectionSession = { ...currentSession, draftAnswer: draft };
+    await saveSession(updated);
+    set({ currentSession: updated });
   },
 
   skipQuestion: async (question, category) => {
@@ -135,15 +172,67 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
     if (!currentSession || !user) return;
     if (analysisStep !== 'idle') return;
     
-    set({ analysisStep: 'scanning', analysisProgress: 10 });
+    set({ analysisStep: 'scanning', analysisProgress: 10, retryAttempt: 0, retryDelaySec: 0, retryingMessage: '' });
+    
+    let attempts = 0;
+    const maxAttempts = 5;
+    let delay = 2000;
+    let analysisData = null;
+
+    while (attempts < maxAttempts) {
+      try {
+        analysisData = await generateAnalysis(
+          currentSession.answers, 
+          currentSession.id, 
+          user.uid,
+          (step, progress) => {
+            // Only update step and progress if we are not actively inside a retrying delay block 
+            if (get().analysisStep !== 'retrying') {
+              set({ analysisStep: step, analysisProgress: progress });
+            }
+          }
+        );
+        break; // Successfully got analysis data!
+      } catch (err: any) {
+        attempts++;
+        const isRateLimit = err?.message?.includes("429") || 
+                            err?.message?.toLowerCase().includes("quota") || 
+                            err?.message?.toLowerCase().includes("exhausted") ||
+                            err?.message?.toLowerCase().includes("rate limit");
+        
+        if (isRateLimit && attempts < maxAttempts) {
+          const delaySec = Math.ceil(delay / 1000);
+          set({ 
+            analysisStep: 'retrying', 
+            retryAttempt: attempts,
+            retryDelaySec: delaySec,
+            isRateLimited: true,
+            retryingMessage: `AI overloaded. Initiating backoff retry ${attempts}/${maxAttempts - 1}.`
+          });
+          
+          for (let sec = delaySec; sec > 0; sec--) {
+            if (get().analysisStep !== 'retrying') break;
+            set({ 
+              retryDelaySec: sec,
+              retryingMessage: `AI overloaded. Initiating backoff retry ${attempts}/${maxAttempts - 1}. Estimated wait: ${sec}s...`
+            });
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+          delay *= 2; // Exponential growth
+        } else {
+          console.error(err);
+          set({ analysisStep: 'idle', retryAttempt: 0, retryDelaySec: 0, retryingMessage: '' });
+          throw err;
+        }
+      }
+    }
+    
+    if (!analysisData) {
+      throw new Error("Unable to complete analysis after multiple backoff attempts.");
+    }
     
     try {
-      // Simulate phases for visual effect
-      setTimeout(() => set({ analysisStep: 'projecting', analysisProgress: 40 }), 2000);
-      setTimeout(() => set({ analysisStep: 'generating', analysisProgress: 70 }), 4000);
-      
-      const analysisData = await generateAnalysis(currentSession.answers);
-      
       const fullResult: BecomingResult = {
         ...analysisData,
         sessionId: currentSession.id,
@@ -163,7 +252,10 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
         analysisStep: 'complete', 
         analysisProgress: 100,
         result: fullResult,
-        isSessionComplete: true
+        isSessionComplete: true,
+        retryAttempt: 0,
+        retryDelaySec: 0,
+        retryingMessage: ''
       });
       
       // Dispatch email notification in background
@@ -191,7 +283,12 @@ export const useBecomingStore = create<BecomingStore>((set, get) => ({
       result: null,
       analysisStep: 'idle',
       analysisProgress: 0,
-      activeView: 'overview'
+      activeView: 'overview',
+      isRateLimited: false,
+      retryAttempt: 0,
+      retryDelaySec: 0,
+      retryingMessage: '',
+      generatedQuestions: []
     });
   }
 }));

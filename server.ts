@@ -7,6 +7,18 @@ import { z } from 'zod';
 import { Request, Response, NextFunction } from 'express';
 import rateLimit from 'express-rate-limit';
 
+// Remediated imports
+import { authMiddleware, AuthenticatedRequest } from "./src/server/middleware/auth";
+import { userRateLimiter } from "./src/server/middleware/rateLimit";
+import { sanitizeUserInput } from "./src/server/utils/sanitize";
+import { compileGracefulFallback } from "./src/server/utils/fallbackCompiler";
+import healthRouter from "./src/server/routes/health";
+import geminiV1Router from "./src/server/routes/v1/gemini";
+import pdfRouter from "./src/server/routes/pdf";
+import { config } from "./src/server/config/index";
+
+const GEMINI_MODEL = "gemini-2.0-flash";
+
 // ─── Validation schemas ──────────────────────────────────────────────────────
 
 const ReflectionAnswerSchema = z.object({
@@ -52,10 +64,11 @@ function validate(schema: z.ZodTypeAny) {
 
 const analyzeLimiter = rateLimit({
   windowMs:       60 * 60 * 1000,   // 1-hour window
-  max:            5,                  // 5 analyze calls per user per hour
+  max:            30,                 // 30 analyze calls per user per hour
   keyGenerator:   (req) => req.body?.userId ?? req.ip ?? 'anonymous',
   standardHeaders: true,
   legacyHeaders:  false,
+  validate: { ip: false },
   message: {
     error:      'Rate limit exceeded — too many analysis requests.',
     retryAfter: 3600,
@@ -68,10 +81,11 @@ const analyzeLimiter = rateLimit({
 
 const questionLimiter = rateLimit({
   windowMs:       10 * 60 * 1000,   // 10-minute window
-  max:            20,                 // 20 question calls per user per 10 minutes
+  max:            100,                // 100 question calls per user per 10 minutes
   keyGenerator:   (req) => req.body?.userId ?? req.ip ?? 'anonymous',
   standardHeaders: true,
   legacyHeaders:  false,
+  validate: { ip: false },
   message: {
     error: 'Rate limit exceeded — too many question requests.',
   },
@@ -98,8 +112,8 @@ function getSendGrid() {
 // Lazy init Gemini
 let _aiClient: GoogleGenAI | null = null;
 function getAI() {
-  const apiKey = process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY;
-  if (!apiKey || apiKey.trim() === "" || apiKey === "undefined" || apiKey === "null") {
+  const apiKey = config.geminiApiKey;
+  if (!apiKey || apiKey.trim() === "") {
     throw new Error("GEMINI_API_KEY environment variable is missing or blank. Please configure a valid GEMINI_API_KEY to enable full AI-assisted insight synthesis.");
   }
   if (!_aiClient) {
@@ -119,9 +133,9 @@ function getAI() {
 async function testGeminiConnection() {
   try {
     const ai = getAI();
-    console.log("[Gemini Startup Check] Contacting model 'gemini-2.0-flash'...");
+    console.log(`[Gemini Startup Check] Contacting model '${GEMINI_MODEL}'...`);
     const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
+      model: GEMINI_MODEL,
       contents: "Respond with only one word: Connected",
     });
     console.log(`\x1b[32m[Gemini Startup Check SUCCESS]\x1b[0m Gemini API handshaked successfully. Received response: "${response.text?.trim()}"`);
@@ -135,169 +149,20 @@ async function testGeminiConnection() {
   }
 }
 
-// Robust mock analysis builder using actual user's answers in case API key is invalid/fails
-function compileGracefulFallback(answers: any[]) {
-  const getAns = (indices: number[]) => {
-    for (const i of indices) {
-      if (answers[i] && answers[i].answer) return answers[i].answer;
-    }
-    return "your silent aspiration";
-  };
-
-  const a0 = getAns([0]);
-  const a1 = getAns([1]);
-  const a3 = getAns([3]);
-  const textBody = answers.map(a => a.answer || "").join(" ").toLowerCase();
-
-  let archetype = "The Awakened Catalyst";
-  let description = "You are motivated by an underlying seek for alignment, constantly balancing your present duties with authentic creative or functional ambitions.";
-  let focusKeyword = "Authenticity";
-  let tagline = "Harnessing friction to fuel self-transformation.";
-  let disciplineLevel = "Developing drive";
-  let growthPotential = "Significant expansion possible";
-
-  if (textBody.includes("code") || textBody.includes("build") || textBody.includes("tech") || textBody.includes("system") || textBody.includes("engineer")) {
-    archetype = "The Digital Alchemist";
-    description = "You translate raw concept and system structures into functional realities, driven by a deep desire to construct resilient, valuable frameworks.";
-    focusKeyword = "Structure";
-    tagline = "Translating complex logical arrays into elegant solutions.";
-    disciplineLevel = "Analytical determination";
-    growthPotential = "Exponential development";
-  } else if (textBody.includes("art") || textBody.includes("write") || textBody.includes("design") || textBody.includes("music") || textBody.includes("creative")) {
-    archetype = "The Creative Visionary";
-    description = "You perceive unseen possibilities within details, channeling your interior depth into expressions that evoke deep personal resonance.";
-    focusKeyword = "Artistry";
-    tagline = "Carving beauty out of complex emotional landscapes.";
-    disciplineLevel = "Intuitive inspiration";
-    growthPotential = "High creative agency";
-  } else if (textBody.includes("business") || textBody.includes("money") || textBody.includes("lead") || textBody.includes("founder") || textBody.includes("client")) {
-    archetype = "The Strategic Builder";
-    description = "You look for leverage and strategic expansion, aiming to assemble systems, businesses, or assets that create compounding lifetime outcomes.";
-    focusKeyword = "Expansion";
-    tagline = "Assembling the foundational pillars of strategic growth.";
-    disciplineLevel = "Strategic persistence";
-    growthPotential = "Scalable leadership";
-  }
-
-  // Dynamic heuristics for high-contrast user metrics
-  const hDiscipline = Math.min(95, Math.max(50, 65 + (textBody.length % 20)));
-  const hConsistency = Math.min(95, Math.max(50, 60 + (textBody.split(" ").length % 25)));
-  const hAdaptability = Math.min(95, Math.max(50, 70 + (textBody.includes("change") || textBody.includes("adapt") ? 15 : 5)));
-  const hResilience = Math.min(95, Math.max(50, 68 + (textBody.includes("fail") || textBody.includes("bounce") ? 17 : 7)));
-  const hExecution = Math.min(95, Math.max(50, 62 + (textBody.includes("do") || textBody.includes("action") ? 18 : 8)));
-  const hAiEraReadiness = Math.min(95, Math.max(50, 75 + (textBody.includes("tech") || textBody.includes("digital") || textBody.includes("ai") ? 15 : 5)));
-
-  return {
-    schemaVersion: 1,
-    identityAnalysis: {
-      strengths: [
-        `Capable of expressing complex feelings: "${a1.slice(0, 80)}..."`,
-        "Deep intuitive awareness of your current limitations",
-        "Willingness to acknowledge internal friction and seek answers"
-      ],
-      blindSpots: [
-        `Allowing your primary blocker ("${a0.slice(0, 60)}...") to freeze your potential`,
-        "A tendency to plan extensively instead of initiating prompt physical action",
-        "Occasions of performing a curated version of yourself instead of remaining raw"
-      ],
-      emotionalPattern: "Driven by periodic spikes of intense inspiration, paired with brief valleys of self-assessment.",
-      learningStyle: "Hands-on, experiential discovery. You learn best by building, writing, or solving through immediate struggle.",
-      coreIdentityArchetype: archetype,
-      archetypeDescription: description
-    },
-    potentialRadar: {
-      discipline: hDiscipline,
-      consistency: hConsistency,
-      adaptability: hAdaptability,
-      resilience: hResilience,
-      execution: hExecution,
-      aiEraReadiness: hAiEraReadiness
-    },
-    futureA: {
-      type: "stagnation",
-      title: "The Circular Path of Deferred Vision",
-      narrative: `In this trajectory, your primary obstacle—"${a0.slice(0, 100)}"—continues to define the contours of your daily routines. Standard days pass by with minimal deviation. You defer major leaps to 'the right moment,' which silently shifts outward, preserving comfort but growing a quiet, heavy sediment of regret.`,
-      keyOutcomes: [
-        "Unrealized projects remain stored purely as raw ideas",
-        "A feeling of safety that slowly transforms into emotional fatigue",
-        "Remaining in roles or environments that do not challenge you"
-      ],
-      emotionalTone: "Comfortable, yet faintly melancholy",
-      sixMonths: "You have planned several starts, but daily urgencies steal your primary attention.",
-      oneYear: "Incremental changes, but the core feeling of stagnant capacity remains persistent.",
-      fiveYears: "You look back wondering when the window closed, realizing you never truly initialized the risk."
-    },
-    futureB: {
-      type: "evolution",
-      title: `The Actualization of: ${a3.slice(0, 45)}`,
-      narrative: `In this path, you make the concrete choice to leverage your strength. Instead of letting obstacles stop you, you turn them into parameters of design. Writing, creating, or building, you aggressively initialize the steps. By putting raw versions out early, you gain compound traction and step into clear alignment.`,
-      keyOutcomes: [
-        `A clear materialization of: "${a3.slice(0, 100)}..."`,
-        "A standard routine grounded in visible, daily compound wins",
-        "A supportive network drawn to your raw, authentic outputs"
-      ],
-      emotionalTone: "Vibrant, aligned, and highly resilient",
-      sixMonths: "You have built the first concrete iteration, proving the concept to yourself.",
-      oneYear: "The initial results compound, creating an entirely new ecosystem of opportunity.",
-      fiveYears: "You stand holding a completely customized, high-leverage actualized life path."
-    },
-    regretPrediction: {
-      topRegrets: [
-        `Failing to move past the temporary friction of "${a0.slice(0, 50)}"`,
-        "Investing too much energy pretending to have everything under control",
-        "Deferring authentic, ambitious works out of hesitation"
-      ],
-      regretNarrative: "Your deepest regret stems not from outright failure, but from partial execution—building the foundations but walking away before seeing them rise.",
-      regretTrigger: "Observing others who started with fewer resources build precisely what you deferred."
-    },
-    futureLetter: {
-      fromName: `Your Future Aligned Self`,
-      toName: "You",
-      year: 2036,
-      body: `I am writing this to tell you that the struggle you underwent was entirely worth it. Every time you chose to sit down, focus, and write down your raw answers despite the discomfort, you carved out another inch of our freedom. The barrier that seemed so massive to you then was just thin ice. Walk through it. We are waiting for you here.`,
-      signature: "With absolute trust, Your Realized Future."
-    },
-    transformationPlan: {
-      weeklyHabits: [
-        { title: "Active Creation Blocks", frequency: "weekly", duration: "90 min", impact: "high", category: "career" },
-        { title: "Friction Journaling", frequency: "daily", duration: "10 min", impact: "medium", category: "mindset" },
-        { title: "Deep Focus (No inputs)", frequency: "daily", duration: "60 min", impact: "high", category: "career" }
-      ],
-      learningRoadmap: [
-        { phase: "Phase 1: Foundation", focus: "Eliminating the primary blocker", milestones: ["Secure a stable creation environment", "Audit active distractions"] },
-        { phase: "Phase 2: Acceleration", focus: "Exposing work to external feedback", milestones: ["Launch the first raw version", "Establish a weekly output rhythm"] }
-      ],
-      antiProcrastinationProtocol: [
-        "Use the 5-Minute Rule: commit to raw focus for five minutes before stopping.",
-        "Block internet routing from your creation tools dynamically.",
-        "Perform the primary, highest-friction task within the first hour of waking."
-      ],
-      focusKeyword: focusKeyword
-    },
-    shareCard: {
-      archetype,
-      potentialScore: 88,
-      aiReadiness: 92,
-      disciplineLevel,
-      growthPotential,
-      tagline
-    },
-    sectionSummaries: {
-      overview: "A synthesis of your core potential scores, radar capacities, and dynamic trajectory projections.",
-      futures: "A direct split between stagnating in comfortable cycles versus choosing authentic actualization.",
-      identity: "An audit of your active strengths, unvarnished blind spots, and underlying emotional patterns.",
-      letter: "A poetic, cinematic correspondence dispatched from your potential future self ten years out.",
-      plan: "A customized weekly habit blueprint, learning phases, and anti-procrastination rules.",
-      share: "A beautifully styled high-contrast summary block optimized for projection and community share."
-    }
-  };
-}
+// Dynamic helpers and routing configurations
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.set("trust proxy", 1);
+
   app.use(express.json());
+
+  // Mount clean remediated routes
+  app.use(healthRouter);
+  app.use("/api/v1/gemini", geminiV1Router);
+  app.use("/api/v1/pdf", pdfRouter);
 
   // API routing for sending emails
   app.post("/api/send-email", async (req, res) => {
@@ -331,17 +196,30 @@ async function startServer() {
   });
 
   // Proxy routes for Gemini API
-  app.post("/api/gemini/analyze", analyzeLimiter, validate(AnalyzeBodySchema), async (req, res) => {
+  app.post("/api/gemini/analyze", authMiddleware, analyzeLimiter, validate(AnalyzeBodySchema), async (req: AuthenticatedRequest, res) => {
+    let userId = "anonymous";
     try {
+      if (req.decodedUser?.uid) {
+        userId = req.decodedUser.uid;
+      } else if (req.body.userId) {
+        userId = req.body.userId;
+      }
       const ai = getAI();
-      const { answers } = req.body;
+      const { answers, sessionId } = req.body;
+
+      // Sanitize inputs
+      const sanitizedAnswers = answers.map((a: any) => ({
+        ...a,
+        answer: sanitizeUserInput(a.answer || "")
+      }));
+
       const prompt = `
 You are an AI psychologist, future strategist, and life coach.
 Based on the following deeply personal reflection answers from a young person (18–27),
 generate a comprehensive self-projection analysis.
 
 USER REFLECTION ANSWERS:
-${answers.map((a: any) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')}
+${sanitizedAnswers.map((a: any) => `Q: ${a.question}\nA: ${a.answer}`).join('\n\n')}
 
 CRITICAL RULES:
 - Be emotionally specific, NOT generic
@@ -354,7 +232,7 @@ CRITICAL RULES:
 `;
 
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: {
           temperature: 0.7,
@@ -385,8 +263,8 @@ CRITICAL RULES:
     } catch (err: any) {
       console.warn("[Gemini API Error] Falling back to pre-compiled self-projection blueprint:", err.message || err);
       try {
-        const { answers } = req.body;
-        const backupResult = compileGracefulFallback(answers || []);
+        const { answers, sessionId } = req.body;
+        const backupResult = compileGracefulFallback(answers || [], sessionId || "sess_legacy", userId);
         res.json(backupResult);
       } catch (fallbackErr: any) {
         console.error("Critical fallback compilation failure:", fallbackErr);
@@ -395,7 +273,7 @@ CRITICAL RULES:
     }
   });
 
-  app.post("/api/gemini/follow-up", questionLimiter, async (req, res) => {
+  app.post("/api/gemini/follow-up", authMiddleware, questionLimiter, async (req: AuthenticatedRequest, res) => {
     try {
       const ai = getAI();
       const { previousAnswers, questionIndex } = req.body;
@@ -406,7 +284,7 @@ The question should feel like a wise, empathetic friend is asking it.
 Return ONLY a JSON object: { "question": "string", "category": "string" }
 `;
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: {
           temperature: 0.8,
@@ -438,7 +316,7 @@ Return ONLY a JSON object: { "question": "string", "category": "string" }
     }
   });
 
-  app.post("/api/gemini/question", questionLimiter, validate(QuestionBodySchema), async (req, res) => {
+  app.post("/api/gemini/question", authMiddleware, questionLimiter, validate(QuestionBodySchema), async (req: AuthenticatedRequest, res) => {
     try {
       const ai = getAI();
       const { previousAnswers, category } = req.body;
@@ -449,7 +327,7 @@ The question should feel like a wise, empathetic friend is asking it.
 Return ONLY a JSON object: { "question": "string", "category": "string" }
 `;
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: {
           temperature: 0.8,
@@ -478,7 +356,7 @@ Return ONLY a JSON object: { "question": "string", "category": "string" }
     }
   });
 
-  app.post("/api/gemini/explain", async (req, res) => {
+  app.post("/api/gemini/explain", authMiddleware, async (req: AuthenticatedRequest, res) => {
     try {
       const ai = getAI();
       const { item, type, context } = req.body;
@@ -489,7 +367,7 @@ Provide a short, punchy, 2-line explanation and actionable advice for this speci
 Return ONLY the text. Do not use markdown or quotes.
 `;
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: { temperature: 0.7 }
       });
@@ -504,7 +382,7 @@ Return ONLY the text. Do not use markdown or quotes.
     }
   });
 
-  app.post("/api/gemini/taglines", async (req, res) => {
+  app.post("/api/gemini/taglines", authMiddleware, async (req: AuthenticatedRequest, res) => {
     try {
       const ai = getAI();
       const { archetype } = req.body;
@@ -513,7 +391,7 @@ Generate 3 short, punchy (1 sentence each) alternative taglines for the archetyp
 They should be emotional and impactful.
 Return a JSON array of strings: ["tagline 1", "tagline 2", "tagline 3"].`;
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: prompt,
         config: { 
           temperature: 0.8,
@@ -544,7 +422,7 @@ Return a JSON array of strings: ["tagline 1", "tagline 2", "tagline 3"].`;
     try {
       const ai = getAI();
       const response = await ai.models.generateContent({
-        model: "gemini-2.0-flash",
+        model: GEMINI_MODEL,
         contents: "Respond with only one word: Connected",
       });
       res.json({
@@ -557,7 +435,7 @@ Return a JSON array of strings: ["tagline 1", "tagline 2", "tagline 3"].`;
       res.json({
         status: "unhealthy",
         error: err.message || "Failed to establish a valid connection with the model",
-        envKeyConfigured: !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY)
+        envKeyConfigured: !!(process.env.GEMINI_API_KEY || process.env.VITE_GEMINI_API_KEY || process.env.GOOGLE_GEMINI_API_KEY || process.env.VITE_GOOGLE_CLOUD_API_KEY)
       });
     }
   });

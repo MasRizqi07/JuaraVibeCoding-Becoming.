@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useBecomingStore } from "../../../../store/useBecomingStore";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, animate } from "motion/react";
 import { PanelLoader } from "./PanelLoader";
 import { SectionSummary } from "./SectionSummary";
 import { 
@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { jsPDF } from "jspdf";
 import { PotentialRadar, BecomingResult } from "../../../../types/becoming";
+import { ResponsiveContainer, AreaChart, Area, Tooltip as ChartTooltip } from "recharts";
 
 const METRIC_KEYS: (keyof PotentialRadar)[] = [
   'discipline',     // Clarity
@@ -74,11 +75,15 @@ function getMetricBreakdownSentence(index: number, score: number): string {
 export default function OverviewPanel() {
   const { result, user } = useBecomingStore();
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const animDoneRef = useRef(false);
+  const animeStartTimeRef = useRef<number>(0);
   const [isLoading, setIsLoading] = useState(true);
   const [prevResult, setPrevResult] = useState<BecomingResult | null>(null);
   const [hoveredMetricIdx, setHoveredMetricIdx] = useState<number | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [canvasDimensions, setCanvasDimensions] = useState({ width: 420, height: 360 });
+  const entranceScaleRef = useRef(0);
   
   // High fidelity states and spring interpolators
   const [enabledMetrics, setEnabledMetrics] = useState<boolean[]>([true, true, true, true, true, true]);
@@ -86,8 +91,60 @@ export default function OverviewPanel() {
   const hoverScalesRef = useRef<number[]>([0, 0, 0, 0, 0, 0]);
   const currentValsRef = useRef<number[]>([0, 0, 0, 0, 0, 0]);
 
+  // Debounced ResizeObserver to optimize responsive rendering of our interactive core radar mapping
   useEffect(() => {
-    const t = setTimeout(() => setIsLoading(false), 500);
+    if (!containerRef.current) return;
+    const container = containerRef.current;
+
+    let debounceTimer: ReturnType<typeof setTimeout>;
+
+    const resizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        // Measure parent padding/margins to dynamically set inner canvas width and height
+        const { width } = entry.contentRect;
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+          // Clamp width between min 240 and max 420 to prevent horizontal scroll on compact devices
+          const computedWidth = Math.max(240, Math.min(420, width - 16));
+          // Keep a standardized aspect ratio of 42/36
+          const computedHeight = Math.round(computedWidth * (36 / 42));
+          
+          setCanvasDimensions((prev) => {
+            if (prev.width === computedWidth && prev.height === computedHeight) {
+              return prev;
+            }
+            return { width: computedWidth, height: computedHeight };
+          });
+        }, 120); // Responsive 120ms debounce to bypass high-frequency frame drops
+      }
+    });
+
+    resizeObserver.observe(container);
+
+    return () => {
+      clearTimeout(debounceTimer);
+      resizeObserver.disconnect();
+    };
+  }, []);
+
+  // Smoothly animate the path scale from 0 to 1 with an elastic (spring-like overshoot) easing function on mount
+  useEffect(() => {
+    if (isLoading) return;
+    const controls = animate(0, 1, {
+      duration: 1.6,
+      ease: [0.175, 0.885, 0.32, 1.275], // Elastic backOut bezier curve which overshoots and bounces beautifully
+      onUpdate: (latest) => {
+        entranceScaleRef.current = latest;
+      }
+    });
+    return () => controls.stop();
+  }, [isLoading]);
+
+  useEffect(() => {
+    const t = setTimeout(() => {
+      setIsLoading(false);
+      animeStartTimeRef.current = Date.now();
+    }, 500);
     return () => clearTimeout(t);
   }, []);
 
@@ -222,7 +279,7 @@ export default function OverviewPanel() {
       c2.beginPath();
       for (let i = 0; i < N; i++) {
         const a = (i/N)*Math.PI*2 - Math.PI/2;
-        const r = R * currentValsRef.current[i];
+        const r = R * currentValsRef.current[i] * entranceScaleRef.current;
         i === 0 ? c2.moveTo(ox + r*Math.cos(a), oy + r*Math.sin(a))
                 : c2.lineTo(ox + r*Math.cos(a), oy + r*Math.sin(a));
       }
@@ -236,7 +293,7 @@ export default function OverviewPanel() {
       // Vertex points and labels with trend indicators inside the chart
       for (let i = 0; i < N; i++) {
         const a = (i/N)*Math.PI*2 - Math.PI/2;
-        const r = R * currentValsRef.current[i];
+        const r = R * currentValsRef.current[i] * entranceScaleRef.current;
         
         const scale = hoverScalesRef.current[i];
         
@@ -382,16 +439,44 @@ export default function OverviewPanel() {
       if (!activeAnimation) return;
       
       let changed = false;
+      const elapsed = animeStartTimeRef.current > 0 ? (Date.now() - animeStartTimeRef.current) : 0;
+      const allAnimDone = elapsed > 1800;
+      
+      if (allAnimDone && !animDoneRef.current) {
+        animDoneRef.current = true;
+      }
+
       for (let i = 0; i < N; i++) {
-        // Smooth scaling trajectory target 
         const key = METRIC_KEYS[i];
         const targetVal = enabledMetrics[i] ? (potentialRadar[key] as number) / 100 : 0;
-        const valDiff = targetVal - currentValsRef.current[i];
-        if (Math.abs(valDiff) > 0.001) {
-          currentValsRef.current[i] += valDiff * 0.12; // Easing coefficient
-          changed = true;
+
+        if (!animDoneRef.current) {
+          const delayMs = i * 150;
+          if (elapsed < delayMs) {
+            currentValsRef.current[i] = 0;
+            changed = true;
+          } else {
+            const progress = Math.min(1, (elapsed - delayMs) / 600);
+            // Elastic spring bounce overshoot
+            const bounce = 1 - Math.cos(progress * Math.PI * 1.5) * Math.exp(-progress * 3);
+            const currentTarget = targetVal * bounce;
+            const valDiff = currentTarget - currentValsRef.current[i];
+            if (Math.abs(valDiff) > 0.001) {
+              currentValsRef.current[i] += valDiff * 0.25;
+              changed = true;
+            } else {
+              currentValsRef.current[i] = currentTarget;
+            }
+          }
         } else {
-          currentValsRef.current[i] = targetVal;
+          // Standard real-time fluid easing
+          const valDiff = targetVal - currentValsRef.current[i];
+          if (Math.abs(valDiff) > 0.001) {
+            currentValsRef.current[i] += valDiff * 0.12; // Easing coefficient
+            changed = true;
+          } else {
+            currentValsRef.current[i] = targetVal;
+          }
         }
 
         // Interpolate hover states
@@ -408,7 +493,8 @@ export default function OverviewPanel() {
       draw();
 
       const isBreathing = hoveredMetricIdx !== null;
-      if (changed || isBreathing) {
+      const isEntranceAnimating = entranceScaleRef.current < 0.999;
+      if (changed || isBreathing || isEntranceAnimating || !animDoneRef.current) {
         raf = requestAnimationFrame(loop);
       } else {
         activeAnimation = false;
@@ -498,7 +584,7 @@ export default function OverviewPanel() {
       canvas.removeEventListener('mouseleave', handleMouseLeave);
       canvas.removeEventListener('click', handleCanvasClick);
     };
-  }, [isLoading, result, prevResult, hoveredMetricIdx, enabledMetrics]);
+  }, [isLoading, result, prevResult, hoveredMetricIdx, enabledMetrics, canvasDimensions]);
 
   if (!result) return null;
   if (isLoading) return <PanelLoader title="Processing Overview..." />;
@@ -943,8 +1029,8 @@ export default function OverviewPanel() {
       {/* Interactive split-pane showing Radar Canvas on left, detailed hover matrix state on right */}
       <div className="grid grid-cols-1 lg:grid-cols-[1fr_360px] gap-[1.5rem] mt-[1.5rem] items-stretch">
         
-        {/* Radar Map container */}
-        <div className="bg-[var(--bg2)] border border-[var(--border)] rounded-[var(--r)] p-[2rem] flex flex-col justify-center items-center relative min-h-[380px]">
+        {/* Radar Map container optimized for mobile screens */}
+        <div ref={containerRef} className="w-full max-w-[420px] bg-[var(--bg2)] border border-[var(--border)] rounded-[var(--r)] p-[1rem] sm:p-[2rem] flex flex-col justify-center items-center relative min-h-[320px] sm:min-h-[380px] overflow-hidden mx-auto lg:mx-0">
           <div className="absolute top-[1rem] left-[1.25rem] flex items-center gap-[0.5rem]">
             <div className="w-[8px] h-[8px] rounded-full bg-[var(--gold)] animate-pulse" />
             <span className="font-mono text-[10px] uppercase tracking-[0.15em] text-[var(--muted)]">Interactive Radar Mapping</span>
@@ -953,8 +1039,8 @@ export default function OverviewPanel() {
           <canvas 
             id="overview-radar"
             ref={canvasRef} 
-            width="420" 
-            height="360" 
+            width={canvasDimensions.width} 
+            height={canvasDimensions.height} 
             className="w-full max-w-[420px] h-auto cursor-crosshair animate-fade-in" 
             style={{ aspectRatio: "42/36" }}
             role="img"
@@ -1096,8 +1182,8 @@ export default function OverviewPanel() {
                             <span>Historical Series</span>
                           </div>
                           
-                          {/* Mini Sparkline Lineages */}
-                          <div className="flex items-end justify-between h-[28px] gap-[3px] px-[0.15rem]">
+                          {/* Mini Sparkline Lineages using high-fidelity Recharts sparkline chart */}
+                          <div className="h-[40px] w-full px-[0.15rem]">
                             {(() => {
                               const historyPoints = [];
                               if (allResults && allResults.length > 1) {
@@ -1120,26 +1206,51 @@ export default function OverviewPanel() {
                                 );
                               }
                               
-                              return historyPoints.map((pt, idx) => {
-                                const barH = Math.max(15, Math.min(100, pt.score));
-                                const isLatest = idx === historyPoints.length - 1;
-                                return (
-                                  <div key={`spark-${idx}`} className="flex-1 flex flex-col items-center justify-end h-full group">
-                                    <div 
-                                      className={`w-full rounded-t-[2px] transition-all duration-300 ${
-                                        isLatest 
-                                          ? "bg-[var(--gold)] hover:brightness-110" 
-                                          : "bg-[#444444] hover:bg-[#666666]"
-                                      }`}
-                                      style={{ height: `${barH}%` }}
-                                      title={`${pt.label}: ${pt.score}%`}
-                                    />
-                                    <span className="text-[7.5px] font-mono text-[var(--muted)] mt-[3px] scale-90 select-none truncate max-w-full">
-                                      {pt.label}
-                                    </span>
+                              return (
+                                <div className="w-full h-full flex flex-col justify-between">
+                                  <div className="h-[28px] w-full">
+                                    <ResponsiveContainer width="100%" height="100%">
+                                      <AreaChart data={historyPoints} margin={{ top: 2, right: 4, left: 4, bottom: 2 }}>
+                                        <defs>
+                                          <linearGradient id={`sparkG-${key}`} x1="0" y1="0" x2="0" y2="1">
+                                            <stop offset="0%" stopColor="var(--gold)" stopOpacity={0.4} />
+                                            <stop offset="100%" stopColor="var(--gold)" stopOpacity={0.0} />
+                                          </linearGradient>
+                                        </defs>
+                                        <ChartTooltip 
+                                          content={({ active, payload }) => {
+                                            if (active && payload && payload.length) {
+                                              return (
+                                                <div className="bg-[#111] border border-[var(--border)] rounded p-[4px_6px] text-[7.5px] font-mono text-[var(--gold)] shadow-lg leading-[1]">
+                                                  {payload[0].payload.label}: <strong className="text-white">{payload[0].value}%</strong>
+                                                </div>
+                                              );
+                                            }
+                                            return null;
+                                          }}
+                                          cursor={{ stroke: "var(--border)", strokeWidth: 0.5 }}
+                                        />
+                                        <Area 
+                                          type="monotone" 
+                                          dataKey="score" 
+                                          stroke="var(--gold)" 
+                                          strokeWidth={1.5} 
+                                          fill={`url(#sparkG-${key})`} 
+                                          dot={{ r: 2, fill: "var(--gold)", strokeWidth: 0 }}
+                                          activeDot={{ r: 3.5, strokeWidth: 1, stroke: "var(--bg3)" }}
+                                        />
+                                      </AreaChart>
+                                    </ResponsiveContainer>
                                   </div>
-                                );
-                              });
+                                  <div className="flex justify-between text-[7px] font-mono text-[var(--muted)] px-[4px] mt-[1px] select-none select-none tracking-[0.05em]">
+                                    {historyPoints.map((pt, idx) => (
+                                      <span key={`lbl-${idx}`} className="truncate max-w-[45px]">
+                                        {pt.label}
+                                      </span>
+                                    ))}
+                                  </div>
+                                </div>
+                              );
                             })()}
                           </div>
                         </div>

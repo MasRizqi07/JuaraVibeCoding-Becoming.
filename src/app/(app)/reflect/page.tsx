@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { motion, AnimatePresence } from 'motion/react';
 import { useBecomingStore } from '../../../store/useBecomingStore';
-import { generateFollowUpQuestion } from '../../../lib/gemini';
+import { generateFollowUpQuestions } from '../../../lib/gemini';
 
 const HARDCODED_QUESTIONS = [
   { question: "What is the one thing you want most from your life right now, and what is stopping you?", category: "fear" },
@@ -28,7 +28,17 @@ function usePrefersReducedMotion() {
 
 export default function ReflectPage() {
   const navigate = useNavigate();
-  const { currentSession, currentQuestionIndex, startSession, submitAnswer, skipQuestion } = useBecomingStore();
+  const { 
+    currentSession, 
+    currentQuestionIndex, 
+    startSession, 
+    submitAnswer, 
+    skipQuestion, 
+    user, 
+    saveDraftAnswer,
+    generatedQuestions,
+    setGeneratedQuestions
+  } = useBecomingStore();
   
   const [currentQ, setCurrentQ] = useState(HARDCODED_QUESTIONS[0]);
   const [answerText, setAnswerText] = useState("");
@@ -36,6 +46,7 @@ export default function ReflectPage() {
   const shouldReduceMotion = usePrefersReducedMotion();
   
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const hasRestoredDraftRef = useRef(false);
 
   useEffect(() => {
     if (!currentSession) {
@@ -47,26 +58,68 @@ export default function ReflectPage() {
     if (currentSession && currentSession.status === 'in_progress') {
       if (currentQuestionIndex < HARDCODED_QUESTIONS.length) {
         setCurrentQ(HARDCODED_QUESTIONS[currentQuestionIndex]);
-        setAnswerText("");
+        if (!hasRestoredDraftRef.current && currentSession.draftAnswer) {
+          setAnswerText(currentSession.draftAnswer);
+          hasRestoredDraftRef.current = true;
+        } else {
+          setAnswerText("");
+        }
       } else if (currentQuestionIndex < TOTAL_QUESTIONS) {
-        setIsProcessing(true);
-        generateFollowUpQuestion(currentSession.answers, currentQuestionIndex)
-          .then(q => {
-            setCurrentQ(q);
+        const offset = currentQuestionIndex - HARDCODED_QUESTIONS.length;
+        
+        const loadActiveQuestion = (questionsArray: { question: string; category: string }[]) => {
+          const q = questionsArray[offset] || { question: "Is there anything else you want to tell your future self?", category: "reflection" };
+          setCurrentQ(q);
+          if (!hasRestoredDraftRef.current && currentSession.draftAnswer) {
+            setAnswerText(currentSession.draftAnswer);
+            hasRestoredDraftRef.current = true;
+          } else {
             setAnswerText("");
-            setIsProcessing(false);
-          })
-          .catch(err => {
-            console.error("AI question failed", err);
-            setCurrentQ({ question: "Is there anything else you want to tell your future self?", category: "reflection" });
-            setAnswerText("");
-            setIsProcessing(false);
-          });
+          }
+          setIsProcessing(false);
+        };
+
+        if (generatedQuestions && generatedQuestions.length > offset) {
+          loadActiveQuestion(generatedQuestions);
+        } else {
+          setIsProcessing(true);
+          const countToFetch = TOTAL_QUESTIONS - HARDCODED_QUESTIONS.length;
+          generateFollowUpQuestions(currentSession.answers, currentQuestionIndex, user?.uid || 'anonymous', countToFetch)
+            .then(res => {
+              const qs = res.questions || [];
+              setGeneratedQuestions(qs);
+              loadActiveQuestion(qs);
+            })
+            .catch(err => {
+              console.error("AI questions bundle failed, falling back gracefully:", err);
+              const fallbackQs = [
+                { question: "What is the single most persistent illusion you keep telling yourself about your habits?", category: "illusion" },
+                { question: "If you could look at yourself through the eyes of someone who deeply believes in you, what is the first thing they would tell you to change?", category: "perspective" },
+                { question: "What is a major choice you deferred recently, and what is the real name of the fear that caused you to defer it?", category: "fear" }
+              ];
+              setGeneratedQuestions(fallbackQs);
+              loadActiveQuestion(fallbackQs);
+            });
+        }
       } else if (currentQuestionIndex >= TOTAL_QUESTIONS) {
         navigate("/analyzing");
       }
     }
   }, [currentQuestionIndex]);
+
+  // Periodic debounced backdrop auto-save to Firestore every 5 seconds to prevent refresh data loss
+  useEffect(() => {
+    if (!currentSession || answerText === "") return;
+    if (currentSession.draftAnswer === answerText) return;
+
+    const timer = setTimeout(() => {
+      saveDraftAnswer(answerText).catch(e => {
+        console.error("Auto-save draft failed:", e);
+      });
+    }, 5000);
+
+    return () => clearTimeout(timer);
+  }, [answerText, currentSession, saveDraftAnswer]);
 
   useEffect(() => {
     if (!isProcessing && textareaRef.current) {

@@ -16,13 +16,15 @@ const AI_THOUGHTS = [
 
 export default function AnalyzingPage() {
   const navigate = useNavigate();
-  const { analysisStep, analysisProgress, triggerAnalysis } = useBecomingStore();
+  const { analysisStep, analysisProgress, triggerAnalysis, retryAttempt, retryDelaySec, retryingMessage } = useBecomingStore();
   const [error, setError] = useState("");
   const [thoughtIndex, setThoughtIndex] = useState(0);
+  const [hasStarted, setHasStarted] = useState(false);
 
   useEffect(() => {
     let isMounted = true;
-    if (analysisStep === 'idle' && !error) {
+    if (analysisStep === 'idle' && !error && !hasStarted) {
+      setHasStarted(true);
       triggerAnalysis().catch((err: any) => {
         if (isMounted) {
           console.error(err);
@@ -42,7 +44,7 @@ export default function AnalyzingPage() {
       });
     }
     return () => { isMounted = false; };
-  }, [analysisStep, triggerAnalysis, error]);
+  }, [analysisStep, triggerAnalysis, error, hasStarted]);
 
   useEffect(() => {
     if (analysisStep === 'complete') {
@@ -63,6 +65,7 @@ export default function AnalyzingPage() {
     scanning: "Reading your patterns...",
     projecting: "Projecting futures...",
     generating: "Building your roadmap...",
+    retrying: "Model Overloaded. Retrying shortly...",
     complete: "Finalizing your profile..."
   };
 
@@ -90,9 +93,42 @@ export default function AnalyzingPage() {
             <div className="font-serif text-[22px] font-light text-[var(--text)] mb-[0.75rem] min-h-[30px]">
               {activeMsg}
             </div>
-            <div className="font-mono text-[11px] tracking-[0.15em] text-[var(--muted)] mb-[2rem]">
-              Processing {Math.min(thoughtIndex + 1, AI_THOUGHTS.length)} of {AI_THOUGHTS.length}
-            </div>
+            
+            {analysisStep === 'retrying' ? (
+              <motion.div
+                initial={{ opacity: 0, y: 5 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="mb-[2rem] text-[var(--gold)] font-mono text-[10px] uppercase tracking-[0.25em] px-5 py-4 rounded bg-[var(--gold-a)]/5 border border-[var(--border-gold)]/20 flex flex-col items-center gap-2 max-w-sm w-full divide-y divide-[var(--border-gold)]/10"
+              >
+                <div className="flex items-center gap-2 pb-2">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full bg-[var(--gold)] animate-ping" />
+                  <span className="font-bold">Model Overloaded (429 Rate Limited)</span>
+                </div>
+                <div className="w-full grid grid-cols-3 gap-2 text-center py-2 text-[9px] tracking-widest text-[var(--muted)]">
+                  <div>
+                    <span className="block text-[11px] font-bold text-[var(--gold)]">{retryAttempt}</span>
+                    <span>ATTEMPT</span>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-bold text-[var(--gold)]">#{Math.max(1, 4 - retryAttempt)}</span>
+                    <span>QEUEUE POS</span>
+                  </div>
+                  <div>
+                    <span className="block text-[11px] font-bold text-[var(--gold)]">{retryDelaySec || 0}s</span>
+                    <span>EST WAIT</span>
+                  </div>
+                </div>
+                <div className="pt-2 w-full text-center">
+                  <span className="text-[10px] text-[var(--text)]/60 normal-case tracking-normal block">
+                    {retryingMessage || "Waiting for secure intelligence slot..."}
+                  </span>
+                </div>
+              </motion.div>
+            ) : (
+              <div className="font-mono text-[11px] tracking-[0.15em] text-[var(--muted)] mb-[2rem]">
+                Processing {Math.min(thoughtIndex + 1, AI_THOUGHTS.length)} of {AI_THOUGHTS.length}
+              </div>
+            )}
           </motion.div>
         ) : (
           <motion.div
@@ -108,7 +144,7 @@ export default function AnalyzingPage() {
               {error}
             </p>
             <button 
-              onClick={() => { setError(""); triggerAnalysis(); }}
+              onClick={() => { setError(""); setHasStarted(false); }}
               className="px-[1.5rem] py-[0.6rem] bg-transparent border border-[var(--border)] text-[var(--text)] text-[11px] rounded-[var(--rs)] uppercase tracking-[0.1em] hover:bg-[#fff1] transition-colors"
             >
               Try Again
